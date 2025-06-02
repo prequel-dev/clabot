@@ -23,12 +23,14 @@ type cfg struct {
 	SignersPath    string // path in repo: "cla-signers.txt"
 	Token          string // GITHUB_TOKEN injected by Actions
 	GoogleSheetUrl string // Path to public Google spreadsheet with signers
+	CommentMsg     string // Message to post as a comment
+	IgnoreAuthors  map[string]struct{}
 }
 
 func fromEnv() cfg {
 	repo := os.Getenv("GITHUB_REPOSITORY") // "<owner>/<repo>"
 	s := strings.Split(repo, "/")
-	return cfg{
+	c := cfg{
 		RepoOwner:      s[0],
 		RepoName:       s[1],
 		EventName:      os.Getenv("GITHUB_EVENT_NAME"),
@@ -36,7 +38,23 @@ func fromEnv() cfg {
 		SignersPath:    os.Getenv("SIGNERS_PATH"),
 		Token:          os.Getenv("GITHUB_TOKEN"),
 		GoogleSheetUrl: os.Getenv("GOOGLE_SHEET_URL"),
+		CommentMsg:     os.Getenv("COMMENT_MSG"),
+		IgnoreAuthors:  make(map[string]struct{}),
 	}
+
+	raw := os.Getenv("BOT_IGNORE_AUTHORS")
+	if raw == "" {
+		raw = "github-actions[bot]"
+	}
+	for _, a := range strings.Split(raw, ",") {
+		c.IgnoreAuthors[strings.ToLower(strings.TrimSpace(a))] = struct{}{}
+	}
+
+	if c.CommentMsg == "" {
+		c.CommentMsg = "Please sign the CLA and then comment `@cla-bot check` on this PR."
+	}
+
+	return c
 }
 
 func newGHClient(token string) *github.Client {
@@ -175,7 +193,7 @@ func handlePullRequest(ctx context.Context, gh *github.Client, c cfg) error {
 		postStatus(ctx, gh, c, sha, "success", "CLA signed ✔️")
 	} else {
 		postStatus(ctx, gh, c, sha, "failure", "CLA not signed ❌")
-		msg := fmt.Sprintf("@%s please sign the CLA (add your GitHub login to `%s`) and then comment `@cla-bot check`.", author, c.SignersPath)
+		msg := fmt.Sprintf("@%s %s", author, c.CommentMsg)
 		postComment(ctx, gh, c, pr.GetNumber(), msg)
 	}
 	return nil
@@ -186,6 +204,13 @@ func handleIssueComment(ctx context.Context, gh *github.Client, c cfg) error {
 	if err := parseEvent(c.EventPath, &ev); err != nil {
 		return err
 	}
+
+	// Ignore comments written by the bot itself
+	author := strings.ToLower(ev.GetComment().GetUser().GetLogin())
+	if _, skip := c.IgnoreAuthors[author]; skip {
+		return nil
+	}
+
 	// We only care if the comment is on a PR
 	if ev.GetIssue().IsPullRequest() == false {
 		return nil
@@ -215,42 +240,6 @@ func handleIssueComment(ctx context.Context, gh *github.Client, c cfg) error {
 	return handlePullRequest(ctx, gh, subCfg)
 }
 
-func loadSignersFromCSV(ctx context.Context, csvURL string) (map[string]struct{}, error) {
-	if csvURL == "" {
-		return nil, errors.New("csv url not provided")
-	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, csvURL, nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("google sheets returned %s", resp.Status)
-	}
-
-	rdr := csv.NewReader(resp.Body)
-	rows, err := rdr.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	signers := make(map[string]struct{}, len(rows))
-	for i, row := range rows {
-		if i == 0 { // skip header row
-			continue
-		}
-		if len(row) == 0 {
-			continue
-		}
-		login := strings.ToLower(strings.TrimSpace(row[0]))
-		if login != "" {
-			signers[login] = struct{}{}
-		}
-	}
-	return signers, nil
-}
-
 func main() {
 	c := fromEnv()
 	ctx := context.Background()
@@ -259,8 +248,10 @@ func main() {
 	var err error
 	switch c.EventName {
 	case "pull_request":
+		log.Info().Msg("Handling pull request")
 		err = handlePullRequest(ctx, gh, c)
 	case "issue_comment":
+		log.Info().Msg("Handling issue comment")
 		err = handleIssueComment(ctx, gh, c)
 	default:
 		log.
