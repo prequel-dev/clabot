@@ -216,9 +216,12 @@ func handleIssueComment(ctx context.Context, gh *github.Client, c cfg) error {
 		return nil
 	}
 	body := strings.ToLower(ev.GetComment().GetBody())
-	if !strings.Contains(body, "@cla-bot") && !strings.Contains(body, "cla-bot check") {
-		return nil
+
+	if !strings.HasPrefix(body, "@cla-bot check") {
+		log.Info().Str("body", body).Msg("Ignoring comment")
+		return nil // nothing to do
 	}
+
 	// Re-use the PR handler by synthesizing a pull_request payload
 	prNum := ev.GetIssue().GetNumber()
 	pr, _, err := gh.PullRequests.Get(ctx, c.RepoOwner, c.RepoName, prNum)
