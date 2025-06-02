@@ -41,3 +41,5 @@ jobs:
         run: |
           go run github.com/prequel-dev/clabot/cmd@v0.0.4
 ```
+
+![Screenshot from 2025-06-02 14-40-48](https://github.com/user-attachments/assets/0de8ff8f-c64c-42ce-bccc-7e0c409b334e)
