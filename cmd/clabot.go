@@ -228,6 +228,10 @@ func handleIssueComment(ctx context.Context, gh *github.Client, c cfg) error {
 	if err != nil {
 		return err
 	}
+
+	sha := pr.GetHead().GetSHA()
+	postStatus(ctx, gh, c, sha, "pending", "CLA check in progress…")
+
 	// Minimal PR event struct
 	pre := github.PullRequestEvent{
 		PullRequest: pr,
